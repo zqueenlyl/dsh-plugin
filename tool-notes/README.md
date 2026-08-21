@@ -31,6 +31,10 @@ Read back notes, optionally filtered to one exact tag.
 
 Returns `{ notes: [{ id, text, tags }], total }` in append order.
 
+## Human command: `/notes`
+
+The plugin also registers a user-facing `/notes [tag]` command: typing it in the WebUI input box renders the session's notes as a chat message — the same durable `note/add` log the tools fold, optionally filtered by one exact tag. No slash argument lists all notes; e.g. `/notes infra` lists only notes tagged `infra`.
+
 ## Event model
 
 Each note is a `note/add` session event `{ text, tags }`; the event's `seq` is the note's stable id. Notes are log-only UI state (never derived history), so they do not enter model context except through `note_list`'s own result.

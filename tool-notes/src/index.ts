@@ -9,6 +9,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-commands'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -19,7 +20,7 @@ import type { Session } from '@deepseek-ai/dsh-session'
 export type * from './types.ts'
 
 export const name = 'tool-notes'
-export const inject = ['tools']
+export const inject = ['tools', 'commands']
 
 /** Model-facing notes tool configuration. */
 export interface Config {
@@ -102,6 +103,52 @@ function readNotes(session: Session): Note[] {
     }
   }
   return notes
+}
+
+/** The human-command invocation fields this plugin reads (structural, no import). */
+interface NotesCommandInvocation {
+  agent?: { session?: Session } | null
+  rawInput: string
+}
+
+/**
+ * Render the `/notes` human command: fold the session's `note/add` events into
+ * a chat message, optionally filtered by one exact tag. This is the
+ * user-facing read entry over the same durable source `note_list` reads.
+ * @param invocation - the human-command invocation carrying the owning agent.
+ * @returns a `{ kind, text }` command result shown in the WebUI.
+ */
+function renderNotesCommand(invocation: NotesCommandInvocation): { kind: 'success' | 'error'; text: string } {
+  const session = invocation.agent?.session
+  if (!session) return { kind: 'error', text: '/notes requires an owning agent session.' }
+
+  const tag = invocation.rawInput.trim()
+  let notes = readNotes(session)
+  if (tag) notes = notes.filter(n => n.tags.includes(tag))
+
+  if (notes.length === 0) {
+    return {
+      kind: 'success',
+      text: tag === '' ? 'No notes recorded yet.' : `No notes with tag "${tag}" yet.`,
+    }
+  }
+  const lines = notes.map(n => `${n.id}. ${n.tags.length > 0 ? `[${n.tags.join(', ')}] ` : ''}${n.text}`)
+  const header = tag === ''
+    ? `Session notes (${notes.length}):`
+    : `Session notes tagged "${tag}" (${notes.length}):`
+  return { kind: 'success', text: `${header}\n${lines.join('\n')}` }
+}
+
+/**
+ * Register the user-facing `/notes` command on `ctx.commands`.
+ * @param ctx - registrant context carrying the command registry.
+ */
+function registerNotesCommand(ctx: Context): void {
+  ctx.effect(() => ctx.commands.register({
+    name: 'notes',
+    description: 'Show the notes recorded in this session (optionally filter by one tag)',
+    handler: renderNotesCommand,
+  }), 'tool-notes: /notes command')
 }
 
 /**
@@ -202,4 +249,6 @@ export function apply(ctx: Context, config: Config): void {
       return Promise.resolve({ notes, total: notes.length })
     },
   }))
+
+  registerNotesCommand(ctx)
 }

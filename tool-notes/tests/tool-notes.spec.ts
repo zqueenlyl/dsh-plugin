@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import CommandRuntime from '@deepseek-ai/dsh-commands'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import { CallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -28,6 +29,7 @@ function agentWithSession(id = 'parent-1'): Agent & { session: Session } {
 async function setup(maxNotes = 100): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
+  await ctx.plugin(CommandRuntime)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(tool, { maxNotes })
   return ctx
@@ -196,24 +198,45 @@ describe('dsh-tool-notes', () => {
   it('unregisters both tools when its fiber is disposed (HMR-safety)', async () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
+    await ctx.plugin(CommandRuntime)
     await ctx.plugin(ToolRuntime)
     const fiber = await ctx.plugin(tool, { maxNotes: 100 })
     expect(ctx.tools.schemas().some(s => s.name === 'note_add')).toBe(true)
     await fiber.dispose()
     expect(ctx.tools.schemas().some(s => s.name === 'note_add')).toBe(false)
     expect(ctx.tools.schemas().some(s => s.name === 'note_list')).toBe(false)
+    expect(ctx.commands.find(agentWithSession('hmr'), 'notes')).toBeUndefined()
   })
 
   it('has the namespace-plugin export shape (no stray default) so the Loader keeps name/inject/apply', () => {
     expect('default' in tool).toBe(false)
     expect(tool.name).toBe('tool-notes')
-    expect(tool.inject).toEqual(['tools'])
+    expect(tool.inject).toEqual(['tools', 'commands'])
 
     const loader = Object.create(Loader.prototype) as Loader
     const unwrapped = loader.unwrapExports(tool) as Record<string, unknown>
     expect(unwrapped).toBe(tool)
     expect(unwrapped.name).toBe('tool-notes')
-    expect(unwrapped.inject).toEqual(['tools'])
+    expect(unwrapped.inject).toEqual(['tools', 'commands'])
     expect(typeof unwrapped.apply).toBe('function')
+  })
+
+  it('registers the `/notes` human command over the same note/add log', async () => {
+    const ctx = await setup()
+    const agent = agentWithSession('cmd')
+    await callTool(ctx, 'note_add', { text: 'the API base URL is https://api.deepseek.com', tags: ['infra'] }, { agent })
+    await callTool(ctx, 'note_add', { text: 'open question: retention', tags: ['question'] }, { agent })
+
+    const all = await ctx.commands.execute(agent, '/notes', [], testToolSignal)
+    expect(all?.result.kind).toBe('success')
+    expect(all?.result.text).toContain('the API base URL is https://api.deepseek.com')
+    expect(all?.result.text).toContain('open question: retention')
+
+    const filtered = await ctx.commands.execute(agent, '/notes infra', [], testToolSignal)
+    expect(filtered?.result.text).toContain('the API base URL is https://api.deepseek.com')
+    expect(filtered?.result.text).not.toContain('open question: retention')
+
+    const unknown = await ctx.commands.execute(agent, '/nope', [], testToolSignal)
+    expect(unknown).toBeUndefined()
   })
 })
